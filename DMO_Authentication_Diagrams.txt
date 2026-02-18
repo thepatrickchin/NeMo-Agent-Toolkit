@@ -1,0 +1,125 @@
+DMO AGENTIC WORKFLOW AUTHENTICATION DIAGRAMS
+================================================================================
+
+This document shows two key authentication patterns for DMO agentic workflows.
+
+
+DIAGRAM 1: USER AUTHENTICATES ONCE WITH STARFLEET, ACCESSES MULTIPLE TOOLS
+================================================================================
+
+
+Step 1: ONE-TIME AUTHENTICATION
+────────────────────────────────────────────────────────────────────────────
+
+    ┌───────────────┐
+    │   End User    │  "I want to use AI tools"
+    └───────┬───────┘
+            │
+            │ (1) Authenticate with Starfleet SSO (ONE TIME ONLY)
+            │     - Browser login OR
+            │     - Device Flow (enter code on phone/browser)
+            │
+            ▼
+    ┌──────────────────────────────────────────────┐
+    │      NVIDIA Starfleet SSO                    │
+    │      https://stg.login.nvidia.com            │
+    │                                              │
+    │  User logs in:                               │
+    │  • Enters username and password              │
+    │  • May complete 2FA                          │
+    │  • Grants authorization                      │
+    └──────────────┬───────────────────────────────┘
+                   │
+                   │ (2) Returns Access Token (valid 1 hour)
+                   │     Contains: User email, ID, group memberships
+                   │
+                   ▼
+    ┌──────────────────────────────────────────────────────────┐
+    │   Application: Claude Desktop (or Code, Writer, etc.)    │
+    │                                                          │
+    │   Stores Access Token ONCE:                              │
+    │   "Bearer eyJhbGciOiJSUzI1NiIsIn..."                     │
+    │                                                          │
+    │   Uses this SAME token to call DMO skills/agents/tools:  │
+    │   ┌──────────────────────────────────────────────────┐   │
+    │   │ • "Talk to Data" skill                           │   │
+    │   │ • "Send Email" skill                             │   │
+    │   │ • "Document Search" skill                        │   │
+    │   │ • "Schedule Meeting" skill                       │   │
+    │   │ • Any other DMO skill/agent/tool                 │   │
+    │   └──────────────────────────────────────────────────┘   │
+    │                                                          │
+    │   No re-authentication needed!                           │
+    └──────────────┬───────────────────────────────────────────┘
+                   
+                   
+                   
+
+
+Step 2: Agent Securuty
+────────────────────────────────────────────────────────────────────────────
+
+Turn 1: User Calls "Talk to Data" Skill
+────────────────────────────────────────
+
+    ┌──────────────────────────────────────────────────────────┐
+    │   Claude Desktop Application                             │
+    │   Has: Starfleet token (from Step 1)                     │
+    │   User types: "What was GTC Spring 2025 count?"          │
+    │   Claude calls: "Talk to Data" skill                     │
+    └──────────┬───────────────────────────────────────────────┘
+               │
+               │ (3) Request to "Talk to Data" skill backend
+               │     POST https://talk-to-data.../mcp
+               │     Authorization: Bearer <starfleet_token>
+               │     Body: {"method": "query", "params": {...}}
+               │
+               ▼
+    ┌──────────────────────────────────────────────────────────────┐
+    │   Talk-to-Data Backend (MCP or REST API)                     │
+    │                                                              │
+    │   (4) Validate Starfleet Token                               │
+    │       ├─ Verify signature using Starfleet JWKS               │
+    │       ├─ Check token not expired                             │
+    │       └─ Verify issuer = stg.login.nvidia.com                │
+    │                                                              │
+    │   (5) Get User Groups from Starfleet                         │
+    │       GET https://stg.login.nvidia.com/userinfo              │
+    │       Authorization: Bearer <token>                          │
+    │                                                              │
+    │       Response:                                              │
+    │       {                                                      │
+    │         "email": "user@nvidia.com",                          │
+    │         "groups": {                                          │
+    │           "group1": "Access-Team-DEVMDL-Users",              │
+    │           "group2": "Access-Product-Quintessence-Users"      │
+    │         }                                                    │
+    │       }                                                      │
+    │                                                              │
+    │   (6) Check Access Control Lists                             │
+    │       Required groups: DEVMDL-Users, Quintessence-Users      │
+    │       User groups: ✓ DEVMDL-Users ✓ Quintessence-Users       │
+    │       Decision: AUTHORIZED ✓                                 │
+    │                                                              │
+    │   (7) Process Request (user is authorized)                   │
+    │       ├─ Generate SQL query                                  │
+    │       ├─ Execute on ClickHouse                               │
+    │       └─ Return results                                      │
+    └──────────────────────┬───────────────────────────────────────┘
+                           │
+                           │ (8) Backend uses SERVICE ACCOUNT
+                           │     to access database (NOT user token)
+                           │     Service credentials stored in backend
+                           │     NEVER exposed to user or AI agent
+                           │
+                           ▼
+                    ┌──────────────────┐
+                    │  ClickHouse DB   │
+                    │                  │
+                    │  Credentials:    │
+                    │  - Username      │
+                    │  - Password      │
+                    │  (Backend only)  │
+                    └──────────────────┘
+
+
